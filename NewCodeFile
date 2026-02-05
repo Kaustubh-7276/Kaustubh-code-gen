@@ -1,0 +1,287 @@
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using Microsoft.Office.Interop.Word;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml;
+using Word = Microsoft.Office.Interop.Word;
+
+namespace BPAServiceIntegration
+{
+    public class PDFGeneration
+    {
+        #region Language Settings
+
+        public class LangSettings
+        {
+            public int Offset { get; set; }
+            public string Font { get; set; }
+            public bool HasSchwa { get; set; }
+
+            public LangSettings(int offset, string font, bool hasSchwa = false)
+            {
+                Offset = offset;
+                Font = font;
+                HasSchwa = hasSchwa;
+            }
+        }
+
+        private static class IndicMaster
+        {
+            public static readonly Dictionary<string, int> Vyanjan = new Dictionary<string, int>
+            {
+                {"ksh",0x16},{"kh",0x16},{"k",0x15},
+                {"gh",0x18},{"g",0x17},{"ng",0x19},
+                {"chh",0x1b},{"ch",0x1a},{"j",0x1c},{"jh",0x1d},{"ny",0x1e},
+                {"tt",0x1f},{"t",0x1f},
+                {"ddh",0x22},{"dd",0x21},{"d",0x21},
+                {"nn",0x23},{"n",0x28},
+                {"th",0x25},{"dh",0x27},
+                {"ph",0x2b},{"p",0x2a},
+                {"bh",0x2d},{"b",0x2c},
+                {"m",0x2e},{"y",0x2f},{"r",0x30},{"l",0x32},
+                {"v",0x35},{"w",0x35},
+                {"sh",0x36},{"s",0x38},{"h",0x39}
+            };
+
+            public static readonly Dictionary<string, int> SwarStart = new Dictionary<string, int>
+            {
+                {"aa",0x06},{"a",0x05},{"ee",0x0a},{"i",0x08},
+                {"oo",0x0c},{"u",0x0b},{"ai",0x10},{"e",0x0f},
+                {"au",0x14},{"o",0x13}
+            };
+
+            public static readonly Dictionary<string, int> MatraMid = new Dictionary<string, int>
+            {
+                {"aa",0x3e},{"i",0x3f},{"ee",0x40},{"u",0x41},
+                {"oo",0x42},{"e",0x47},{"ai",0x48},
+                {"o",0x4b},{"au",0x4c}
+            };
+
+            public const int Halant = 0x4d;
+        }
+
+        public static readonly Dictionary<string, LangSettings> LangConfig =
+        new Dictionary<string, LangSettings>
+        {
+            { "hi-IN", new LangSettings(0x0900, "Mangal", true) },
+            { "mr-IN", new LangSettings(0x0900, "Mangal", true) },
+            { "gu-IN", new LangSettings(0x0A80, "Shruti") },
+            { "ta-IN", new LangSettings(0x0B80, "Latha") },
+            { "te-IN", new LangSettings(0x0C00, "Gautami") },
+            { "kn-IN", new LangSettings(0x0C80, "Tunga") }
+        };
+
+        #endregion
+
+        #region Transliteration Engine
+
+        public string Transliterate(string input, string langCode)
+        {
+            if (!LangConfig.ContainsKey(langCode) || string.IsNullOrWhiteSpace(input))
+                return input;
+
+            if (Regex.IsMatch(input, @"^[A-Z0-9\s]+$") ||
+                Regex.IsMatch(input, @"[0-9!@#\$%\^&\*\(\)\.\?\/\\_\-]"))
+                return input;
+
+            LangSettings lang = LangConfig[langCode];
+            int offset = lang.Offset;
+
+            StringBuilder finalResult = new StringBuilder();
+            string[] words = input.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (string word in words)
+            {
+                string w = word.ToLower();
+                int i = 0;
+                StringBuilder wOut = new StringBuilder();
+
+                while (i < w.Length)
+                {
+                    // Independent vowel at word start
+                    var swar = IndicMaster.SwarStart.Keys
+                        .OrderByDescending(k => k.Length)
+                        .FirstOrDefault(k => w.Substring(i).StartsWith(k));
+
+                    if (swar != null && i == 0)
+                    {
+                        wOut.Append((char)(offset + IndicMaster.SwarStart[swar]));
+                        i += swar.Length;
+                        continue;
+                    }
+
+                    // Consonant
+                    var vyanjan = IndicMaster.Vyanjan.Keys
+                        .OrderByDescending(k => k.Length)
+                        .FirstOrDefault(k => w.Substring(i).StartsWith(k));
+
+                    if (vyanjan != null)
+                    {
+                        wOut.Append((char)(offset + IndicMaster.Vyanjan[vyanjan]));
+                        i += vyanjan.Length;
+
+                        // Explicit matra
+                        var matra = (i < w.Length)
+                            ? IndicMaster.MatraMid.Keys
+                                .OrderByDescending(k => k.Length)
+                                .FirstOrDefault(k => w.Substring(i).StartsWith(k))
+                            : null;
+
+                        if (matra != null)
+                        {
+                            wOut.Append((char)(offset + IndicMaster.MatraMid[matra]));
+                            i += matra.Length;
+                        }
+                        else if (i < w.Length && w[i] == 'a')
+                        {
+                            i++; // consume implicit vowel
+                        }
+                        else if (lang.HasSchwa)
+                        {
+                            // default spoken schwa
+                            wOut.Append((char)(offset + IndicMaster.MatraMid["aa"]));
+                        }
+
+                        continue;
+                    }
+
+                    i++;
+                }
+
+                finalResult.Append(wOut + " ");
+            }
+
+            return finalResult.ToString().Trim();
+        }
+
+        #endregion
+
+        #region Document Processing
+
+        public byte[] ProcessDocument(string xmlString)
+        {
+            Word.Application wordApp = null;
+            Word.Document wordDoc = null;
+            string outputDocx = string.Empty;
+            string outputPdf = string.Empty;
+
+            try
+            {
+                string key = CallKey();
+                string decryptedXml = PasswordDecrypt(xmlString, key);
+
+                int start = decryptedXml.IndexOf('<');
+                int end = decryptedXml.LastIndexOf('>');
+                decryptedXml = decryptedXml.Substring(start, end - start + 1);
+
+                XmlDocument xml = new XmlDocument();
+                xml.LoadXml(decryptedXml);
+
+                string langCode = xml.SelectSingleNode("//language")?.InnerText ?? "en-IN";
+                LangSettings cfg = LangConfig.ContainsKey(langCode)
+                    ? LangConfig[langCode]
+                    : new LangSettings(0, "Calibri");
+
+                string baseDir = @"E:\CBBranch4.6";
+                string templatePath = xml.SelectSingleNode("//templatePath")?.InnerText;
+                string src = Path.Combine(baseDir, "RTF", Path.GetFileName(templatePath));
+
+                string ts = DateTime.Now.ToString("yyyyMMddHHmmssfff");
+                outputDocx = Path.Combine(baseDir, "RTFTEMP", $"TMP_{ts}.docx");
+                outputPdf = Path.Combine(baseDir, "RTFTEMP", $"TMP_{ts}.pdf");
+
+                File.Copy(src, outputDocx, true);
+
+                using (WordprocessingDocument doc = WordprocessingDocument.Open(outputDocx, true))
+                {
+                    Regex rx = new Regex(@"\|\|\s*(.*?)\s*\|\|");
+
+                    var parts = new List<OpenXmlCompositeElement>
+                    {
+                        doc.MainDocumentPart.Document.Body
+                    };
+
+                    parts.AddRange(doc.MainDocumentPart.HeaderParts.Select(h => h.Header));
+                    parts.AddRange(doc.MainDocumentPart.FooterParts.Select(f => f.Footer));
+
+                    foreach (var part in parts)
+                    {
+                        foreach (var p in part.Descendants<Paragraph>())
+                        {
+                            while (true)
+                            {
+                                Match m = rx.Match(p.InnerText);
+                                if (!m.Success) break;
+
+                                string name = m.Groups[1].Value;
+                                string val = xml.SelectSingleNode($"//*[local-name()='{name}']")?.InnerText ?? "";
+                                string outVal = langCode != "en-IN" ? Transliterate(val, langCode) : val;
+
+                                ReplaceTextInExistingRuns(p, m.Index, m.Length, outVal, cfg.Font);
+                            }
+                        }
+                    }
+                }
+
+                wordApp = new Word.Application { Visible = false };
+                wordDoc = wordApp.Documents.Open(outputDocx, ReadOnly: true);
+                wordDoc.ExportAsFixedFormat(outputPdf, Word.WdExportFormat.wdExportFormatPDF);
+
+                return File.ReadAllBytes(outputPdf);
+            }
+            finally
+            {
+                if (wordDoc != null) { wordDoc.Close(false); Marshal.ReleaseComObject(wordDoc); }
+                if (wordApp != null) { wordApp.Quit(); Marshal.ReleaseComObject(wordApp); }
+
+                if (File.Exists(outputDocx)) File.Delete(outputDocx);
+                if (File.Exists(outputPdf)) File.Delete(outputPdf);
+            }
+        }
+
+        #endregion
+
+        #region Helpers
+
+        private void ReplaceTextInExistingRuns(Paragraph para, int start, int len, string text, string font)
+        {
+            var runs = para.Descendants<Text>().ToList();
+            int pos = 0;
+
+            foreach (var t in runs)
+            {
+                if (start >= pos && start < pos + t.Text.Length)
+                {
+                    t.Text = t.Text.Remove(start - pos, len).Insert(start - pos, text);
+                    if (t.Parent is Run r)
+                    {
+                        r.RunProperties ??= new RunProperties();
+                        r.RunProperties.RunFonts = new RunFonts
+                        {
+                            Ascii = font,
+                            HighAnsi = font,
+                            ComplexScript = font
+                        };
+                    }
+                    break;
+                }
+                pos += t.Text.Length;
+            }
+        }
+
+        static string CallKey() => "YOUR_EXISTING_KEY";
+
+        static string PasswordEncrypt(string s, string k) => s;
+        static string PasswordDecrypt(string s, string k) => s;
+
+        #endregion
+    }
+}
