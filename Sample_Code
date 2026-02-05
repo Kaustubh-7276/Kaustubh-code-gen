@@ -1,0 +1,301 @@
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml;
+using Word = Microsoft.Office.Interop.Word;
+namespace BPAServiceIntegration
+{
+    public class PDFGeneration
+    {
+        public class LangSettings
+        {
+            public int Offset { get; set; }
+            public string Font { get; set; }
+
+            public bool HasSchwa;
+
+            public bool NoSchwa;
+            public LangSettings(int offset, string font) { Offset = offset; Font = font; }
+        }
+
+        private static class IndicMaster
+        {
+            public static readonly Dictionary<string, int> Vyanjan = new Dictionary<string, int> {
+            {"khy", 0x16}, {"ghy", 0x18}, {"k", 0x15}, {"kh", 0x16}, {"g", 0x17}, {"gh", 0x18}, {"ng", 0x19},
+            {"chh", 0x1b}, {"ch", 0x1a}, {"j", 0x1c}, {"jh", 0x1d}, {"ny", 0x1e},
+            {"tth", 0x20}, {"tt", 0x1f}, {"ddh", 0x22}, {"dd", 0x21}, {"nn", 0x23},
+            {"th", 0x25}, {"t", 0x24}, {"dh", 0x27}, {"d", 0x26}, {"n", 0x28},
+            {"ph", 0x2b}, {"p", 0x2a}, {"bh", 0x2d}, {"b", 0x2c}, {"m", 0x2e},
+            {"y", 0x2f}, {"r", 0x30}, {"l", 0x32}, {"v", 0x35}, {"w", 0x35},
+            {"sh", 0x36}, {"ssh", 0x37}, {"s", 0x38}, {"h", 0x39}, {"lla", 0x33}
+        };
+
+            public static readonly Dictionary<string, int> SwarStart = new Dictionary<string, int> {
+            {"aa", 0x06}, {"a", 0x05}, {"ee", 0x0a}, {"i", 0x08}, {"oo", 0x0c}, {"u", 0x0b},
+            {"ai", 0x10}, {"e", 0x0f}, {"au", 0x14}, {"o", 0x13}
+        };
+
+            public static readonly Dictionary<string, int> MatraMid = new Dictionary<string, int> {
+            {"aa", 0x3e}, {"ee", 0x40}, {"i", 0x3f}, {"oo", 0x42}, {"u", 0x41},
+            {"ai", 0x48}, {"e", 0x47}, {"au", 0x4c}, {"o", 0x4b}, {"n", 0x02}
+        };
+
+            public const int Halant = 0x4d;
+        }
+
+        public static readonly Dictionary<string, LangSettings> LangConfig = new Dictionary<string, LangSettings> {
+        { "hi-IN", new LangSettings(0x0900, "Mangal") },    { "mr-IN", new LangSettings(0x0900, "Mangal") },
+        { "gu-IN", new LangSettings(0x0A80, "Shruti") },    { "kn-IN", new LangSettings(0x0C80, "Tunga") },
+        { "te-IN", new LangSettings(0x0C00, "Gautami") },   { "ta-IN", new LangSettings(0x0B80, "Latha") }
+    };
+
+        public byte[] ProcessDocument(string xmlString)
+        {
+            Word.Application wordApp = null; Word.Document wordDoc = null;
+            string outputDocx = string.Empty; string outputPdf = string.Empty;
+            string strKey = string.Empty;
+
+            try
+            {
+                Log("Step 1: Decrypting & Loading XML...");
+                strKey = CallKey();
+                string decryptedXml = PasswordDecrypt(xmlString, strKey);
+
+                // FIX: XML SANITATION to remove hidden BOM or null-padding
+                int firstOpen = decryptedXml.IndexOf('<');
+                int lastClose = decryptedXml.LastIndexOf('>');
+                if (firstOpen < 0 || lastClose < 0) throw new Exception("Invalid XML Data");
+                string cleanXml = decryptedXml.Substring(firstOpen, (lastClose - firstOpen) + 1);
+
+                XmlDocument inXmlDoc = new XmlDocument();
+                using (StringReader sr = new StringReader(cleanXml))
+                {
+                    inXmlDoc.Load(sr);
+                }
+
+                string langCode = inXmlDoc.SelectSingleNode("//language")?.InnerText ?? "en-IN";
+                LangSettings config = LangConfig.ContainsKey(langCode) ? LangConfig[langCode] : new LangSettings(0, "Calibri");
+
+                Log("Step 2: Preparing Paths...");
+                string baseDir = @"E:\CBBranch4.6";
+                string templatePath = inXmlDoc.SelectSingleNode("//templatePath")?.InnerText;
+                string sourceTemplate = Path.Combine(baseDir, "RTF", Path.GetFileName(templatePath));
+
+                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                outputDocx = Path.Combine(baseDir, "RTFTEMP", $"Tmp_{timestamp}.docx");
+                outputPdf = Path.Combine(baseDir, "RTFTEMP", $"Tmp_{timestamp}.pdf");
+                File.Copy(sourceTemplate, outputDocx, true);
+
+                Log("Step 3: OpenXML Replacement...");
+                using (WordprocessingDocument doc = WordprocessingDocument.Open(outputDocx, true))
+                {
+                    Regex fieldRegex = new Regex(@"\|\|\s*(?<fieldName>.*?)\s*\|\|", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+                    var sections = new List<OpenXmlCompositeElement> { doc.MainDocumentPart.Document.Body };
+                    sections.AddRange(doc.MainDocumentPart.HeaderParts.Select(h => h.Header));
+                    sections.AddRange(doc.MainDocumentPart.FooterParts.Select(f => f.Footer));
+
+                    foreach (var section in sections.Where(s => s != null))
+                    {
+                        foreach (var para in section.Descendants<Paragraph>())
+                        {
+                            // Continuous scan to handle multiple fields per line correctly
+                            while (true)
+                            {
+                                string currentText = para.InnerText;
+                                Match m = fieldRegex.Match(currentText);
+                                if (!m.Success) break;
+
+                                string fName = m.Groups["fieldName"].Value.Trim();
+                                XmlNode fNode = inXmlDoc.SelectSingleNode("//*[local-name()='" + fName + "']");
+
+                                string rawVal = fNode?.InnerText ?? "";
+                                string finalVal = (langCode != "en-IN") ? Transliterate(rawVal, langCode) : rawVal;
+                                if (string.IsNullOrEmpty(finalVal)) finalVal = new string(' ', m.Length);
+
+                                ReplaceTextInExistingRuns(para, m.Index, m.Length, finalVal, config.Font);
+                            }
+                        }
+                    }
+                    doc.MainDocumentPart.Document.Save();
+                }
+
+                Log("Step 4: Interop Export...");
+                wordApp = new Word.Application { Visible = false, DisplayAlerts = Word.WdAlertLevel.wdAlertsNone };
+                wordDoc = wordApp.Documents.Open(outputDocx, ReadOnly: true);
+                wordDoc.ExportAsFixedFormat(outputPdf, Word.WdExportFormat.wdExportFormatPDF);
+
+                byte[] rawPdfBytes = File.ReadAllBytes(outputPdf);
+                return Encoding.UTF8.GetBytes(PasswordEncrypt(Convert.ToBase64String(rawPdfBytes), strKey));
+            }
+            finally
+            {
+                if (wordDoc != null) { wordDoc.Close(false); Marshal.FinalReleaseComObject(wordDoc); }
+                if (wordApp != null) { wordApp.Quit(); Marshal.FinalReleaseComObject(wordApp); }
+                try { if (File.Exists(outputDocx)) File.Delete(outputDocx); if (File.Exists(outputPdf)) File.Delete(outputPdf); } catch { }
+            }
+        }
+
+        public string Transliterate(string input, string langCode)
+        {
+            if (!LangConfig.ContainsKey(langCode) || string.IsNullOrWhiteSpace(input)) return input;
+
+            // Skip codes/numeric values
+            if (input.Length <= 1 || Regex.IsMatch(input, @"[0-9!@#\$%\^&\*\(\)\.\?\/\\_\-]") || Regex.IsMatch(input, @"^[A-Z\s0-9]+$"))
+                return input;
+
+            int offset = LangConfig[langCode].Offset;
+            StringBuilder finalResult = new StringBuilder();
+            string[] words = input.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (string word in words)
+            {
+                string w = word.ToLower();
+                int i = 0;
+                StringBuilder wOut = new StringBuilder();
+
+                while (i < w.Length)
+                {
+                    // Standalone Vowels (Start of word)
+                    var swar = IndicMaster.SwarStart.Keys.OrderByDescending(k => k.Length).FirstOrDefault(k => w.Substring(i).StartsWith(k));
+                    if (swar != null && i == 0)
+                    {
+                        wOut.Append((char)(offset + IndicMaster.SwarStart[swar]));
+                        i += swar.Length; continue;
+                    }
+
+                    // Consonants
+                    var vyanjan = IndicMaster.Vyanjan.Keys.OrderByDescending(k => k.Length).FirstOrDefault(k => w.Substring(i).StartsWith(k));
+                    if (vyanjan != null)
+                    {
+                        wOut.Append((char)(offset + IndicMaster.Vyanjan[vyanjan]));
+                        i += vyanjan.Length;
+
+                        if (i < w.Length)
+                        {
+                            var matra = IndicMaster.MatraMid.Keys.OrderByDescending(k => k.Length).FirstOrDefault(k => w.Substring(i).StartsWith(k));
+                            if (matra != null)
+                            {
+                                wOut.Append((char)(offset + IndicMaster.MatraMid[matra]));
+                                i += matra.Length;
+                            }
+                            else if (w[i] == 'a') { i++; } // Implicit joiner
+                            else if (char.IsLetter(w[i])) { wOut.Append((char)(offset + IndicMaster.Halant)); }
+                        }
+                        continue;
+                    }
+                    i++;
+                }
+                string processed = wOut.ToString();
+                if (processed.EndsWith(((char)(offset + IndicMaster.Halant)).ToString()))
+                    processed = processed.TrimEnd((char)(offset + IndicMaster.Halant));
+
+                finalResult.Append(processed + " ");
+            }
+            return finalResult.ToString().Trim();
+        }
+
+        private void ReplaceTextInExistingRuns(Paragraph para, int startIndex, int length, string replacement, string font)
+        {
+            var textElements = para.Descendants<Text>().ToList();
+            int currentPos = 0; int remaining = length; bool found = false;
+
+            foreach (var text in textElements)
+            {
+                int textLen = text.Text.Length;
+                if (!found && startIndex >= currentPos && startIndex < currentPos + textLen)
+                {
+                    int localStart = startIndex - currentPos;
+                    int inRun = Math.Min(textLen - localStart, remaining);
+
+                    if (text.Parent is Run r)
+                    {
+                        if (r.RunProperties == null) r.RunProperties = new RunProperties();
+                        r.RunProperties.RunFonts = new RunFonts { ComplexScript = font, Ascii = font, HighAnsi = font };
+                    }
+
+                    string prefix = text.Text.Substring(0, localStart);
+                    string suffix = text.Text.Substring(localStart + inRun);
+                    text.Text = prefix + replacement + suffix;
+                    remaining -= inRun; found = true;
+                }
+                else if (found && remaining > 0)
+                {
+                    int clear = Math.Min(textLen, remaining);
+                    text.Text = text.Text.Remove(0, clear);
+                    remaining -= clear;
+                }
+                currentPos += textLen;
+                if (found && remaining <= 0) break;
+            }
+        }
+
+        private void Log(string msg) => Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {msg}");
+
+
+        #region Symmetric Cryptography (Must match the ASMX Service Logic)
+
+        static string CallKey()
+        {
+            return "1bJTd2SauPv5Garuaq0Ig43uqq5NJOEw94wxdZTpUpFB9GmyPk677gJvC1Ro6sbAvKR4pVwtxdCfuoZDb6hJ5bVQKqlfihJfSYZtxVrVU270JhFbqTmYskatMTgPyjvv99CF2Te8ecYs2SPxyZAF0YwOCNOWmsyqN5y9tq2Kw2pjoiDs5gIHuw5U49JzOB6otS7kThBJEH9A76u4uUvR8DKbVcBrWu5qSJGEnbsXNfJdq5L2D8QgRdVsXHp2A7j1X2n4WIISvU1V9koIySNisHFBTcWJS0sC5BTFwrtfLEE9lEwz2bxHQpWJiu12ZeKpi7oUSqeb";
+        }
+
+        static string PasswordEncrypt(string inText, string key)
+        {
+            byte[] bytesBuff = Encoding.Unicode.GetBytes(inText);
+            using (Aes aesAlg = Aes.Create())
+            {
+                // Salt MUST match exactly with the ASMX.VB service
+                byte[] salt = new byte[] { 73, 118, 97, 110, 32, 77, 101, 100, 118, 101, 100, 101, 118 };
+                using (var crypto = new Rfc2898DeriveBytes(key, salt))
+                {
+                    aesAlg.Key = crypto.GetBytes(32);
+                    aesAlg.IV = crypto.GetBytes(16);
+                    using (var mStream = new MemoryStream())
+                    {
+                        using (var cStream = new CryptoStream(mStream, aesAlg.CreateEncryptor(), CryptoStreamMode.Write))
+                        {
+                            cStream.Write(bytesBuff, 0, bytesBuff.Length);
+                            cStream.FlushFinalBlock();
+                        }
+                        return Convert.ToBase64String(mStream.ToArray());
+                    }
+                }
+            }
+        }
+
+        static string PasswordDecrypt(string cryptTxt, string key)
+        {
+            // Handle Base64 URL character replacement
+            cryptTxt = cryptTxt.Replace(" ", "+");
+            byte[] bytesBuff = Convert.FromBase64String(cryptTxt);
+            using (Aes aesAlg = Aes.Create())
+            {
+                byte[] salt = new byte[] { 73, 118, 97, 110, 32, 77, 101, 100, 118, 101, 100, 101, 118 };
+                using (var crypto = new Rfc2898DeriveBytes(key, salt))
+                {
+                    aesAlg.Key = crypto.GetBytes(32);
+                    aesAlg.IV = crypto.GetBytes(16);
+                    using (var mStream = new MemoryStream())
+                    {
+                        using (var cStream = new CryptoStream(mStream, aesAlg.CreateDecryptor(), CryptoStreamMode.Write))
+                        {
+                            cStream.Write(bytesBuff, 0, bytesBuff.Length);
+                            cStream.FlushFinalBlock();
+                        }
+                        return Encoding.Unicode.GetString(mStream.ToArray());
+                    }
+                }
+            }
+        }
+        #endregion
+    }
+}
