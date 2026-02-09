@@ -1,0 +1,1167 @@
+Imports System.IO
+Friend Module DynamicFileUpdator
+    Public Sub Main(args As String())
+        If args.Length = 0 OrElse args.Length > 4 Then
+            PrintBanner()
+            Log("******* Invalid Arguments: Please refer to the below help menu *******", LogLevel.Info)
+            ShowHelp()
+            Return
+        End If
+        If Not CheckForDynamicPath() OrElse Not IsValidCommand(args) Then
+            Return
+        End If
+        Try
+            Dim command As String = args(0).ToLower()
+            Select Case command
+                Case "addtype"
+                    HandleAddType(args)
+                Case "deletetype"
+                    HandleDeleteType(args)
+                Case "changeparameter"
+                    HandleChangeParameter(args)
+                Case "blockscreen"
+                    UpdateBlackListedTransaction(args)
+                Case "help"
+                    PrintBanner()
+                    ShowHelp()
+                Case Else
+                    Log("Unknown command. Use 'help' to see available commands.", LogLevel.Error)
+            End Select
+        Catch ex As FileNotFoundException
+            Log($"❌ File not found: {ex.Message}", LogLevel.Error)
+        Catch ex As UnauthorizedAccessException
+            Log($"❌ Access denied: {ex.Message}", LogLevel.Error)
+        Catch ex As Exception
+            Log($"❌ An unexpected error occurred: {ex.Message}{Environment.NewLine}{ex.StackTrace}", LogLevel.Error)
+        End Try
+    End Sub
+End Module
+Imports System.IO
+Imports System.Text.RegularExpressions
+
+Module BLCValidation
+    Public Function IsValidCommand(args As String()) As Boolean
+        Try
+            For Each argument As String In args
+                For Each restricted As String In RistrictedArguments
+                    If argument.Contains(restricted) Then
+                        Log($"Arguments '{String.Join(" ", args)}' Contains restricted argument type i.e. '{restricted}' ", LogLevel.Error)
+                        Return False
+                    End If
+                Next
+                For Each characs As String In RestrictedCharSet
+                    If argument.Contains(characs) Then
+                        Log($"Arguments '{String.Join(" ", args)}' Contains restricted argument type i.e. '{characs}' ", LogLevel.Error)
+                        Return False
+                    End If
+                Next
+            Next
+
+            For Each argumentNew As String In args
+                ' Reject if contains slashes or backslashes
+                If argumentNew.Contains("/") OrElse argumentNew.Contains("\") Then
+                    Log($"Argument '{argumentNew}' should not contain '/' or '\'.", LogLevel.Error)
+                    Return False
+                End If
+
+                ' Reject if contains path traversal
+                If argumentNew.Contains("..") Then
+                    Log($"Argument '{argumentNew}' should not contain '..'.", LogLevel.Error)
+                    Return False
+                End If
+
+                ' Reject if argument matches reserved device name (without extension)
+                Dim nameWithoutExtension As String = argumentNew ' you don't expect extensions anyway
+                If ReverseNames.Any(Function(rn) String.Equals(rn, nameWithoutExtension, StringComparison.OrdinalIgnoreCase)) Then
+                    Log($"Argument '{argumentNew}' is a reserved device name.", LogLevel.Error)
+                    Return False
+                End If
+
+                ' Reject if contains invalid filename characters
+                Dim invalidChars As Char() = System.IO.Path.GetInvalidFileNameChars()
+                If argumentNew.IndexOfAny(invalidChars) >= 0 Then
+                    Log($"Argument '{argumentNew}' contains invalid characters.", LogLevel.Error)
+                    Return False
+                End If
+
+                ' Reject if too long
+                If argumentNew.Length > 255 Then
+                    Log($"Argument '{argumentNew}' is too long.", LogLevel.Error)
+                    Return False
+                End If
+            Next
+
+            ' Get the command name from args(0)
+            OperationMethod = SanitizeInput(args(0))
+            Try
+                TranToExecute = SanitizeInput(args(1))
+            Catch ex As Exception
+                TranToExecute = ""
+            End Try
+
+            ' Check if the command is in the allowed list
+            If Not AllowedCommands.Contains(OperationMethod, StringComparer.OrdinalIgnoreCase) Then
+                PrintBanner()
+                Log($"Unknown command: {OperationMethod}. Use 'help' to see available commands.", LogLevel.Error)
+                ShowHelp()
+                Return False
+            End If
+
+            ' Now check argument count based on command
+            If OperationMethod.Equals("addtype", StringComparison.OrdinalIgnoreCase) Then
+                ExpectedArguments = "3"
+                If args.Length <> 3 Then
+                    PrintBanner()
+                    Log($"Invalid number of arguments for addtype. Expected '{ExpectedArguments}' arguments.", LogLevel.Error)
+                    ShowHelp()
+                    Return False
+                End If
+                If Not AllowedFileNames.Contains(TranToExecute, StringComparer.OrdinalIgnoreCase) Then
+                    Log($"Unknown Transaction i.e '{TranToExecute}' for '{OperationMethod}'.Connect to Service Desk for more details or use 'help' to see available commands.", LogLevel.Error)
+                    Return False
+                End If
+            ElseIf OperationMethod.Equals("help", StringComparison.OrdinalIgnoreCase) Then
+                ExpectedArguments = "1"
+                If args.Length <> 1 Then
+                    PrintBanner()
+                    Log("The 'help' command doesn't require extra arguments.", LogLevel.Error)
+                    ShowHelp()
+                    Return False
+                End If
+            ElseIf OperationMethod.Equals("deletetype", StringComparison.OrdinalIgnoreCase) Then
+                ExpectedArguments = "3"
+                If args.Length <> 3 Then
+                    PrintBanner()
+                    Log($"Invalid number of arguments for deletetype. Expected '{ExpectedArguments}' arguments.", LogLevel.Error)
+                    ShowHelp()
+                    Return False
+                End If
+                If Not AllowedFileNames.Contains(TranToExecute, StringComparer.OrdinalIgnoreCase) Then
+                    PrintBanner()
+                    Log($"Unknown Transaction i.e '{TranToExecute}' for '{OperationMethod}'. Use 'help' to see available commands.", LogLevel.Error)
+                    ShowHelp()
+                    Return False
+                End If
+            ElseIf OperationMethod.Equals("changeparameter", StringComparison.OrdinalIgnoreCase) Then
+                ExpectedArguments = "4"
+                If args.Length <> 4 Then
+                    PrintBanner()
+                    Log($"Invalid number of arguments for changeparameter. Expected '{ExpectedArguments}' arguments.", LogLevel.Error)
+                    ShowHelp()
+                    Return False
+                End If
+            ElseIf OperationMethod.Equals("blockscreen", StringComparison.OrdinalIgnoreCase) Then
+                ExpectedArguments = "3"
+                If args.Length <> "3" Then
+                    PrintBanner()
+                    Log($"Invalid number of arguments for changeparameter. Expected '{ExpectedArguments}' arguments.", LogLevel.Error)
+                    ShowHelp()
+                    Return False
+                Else
+                    ScreenOperation = SanitizeInput(args(1).ToLower)
+                    TranNumber = SanitizeInput((args(2)))
+
+                    If Not AllowedOperation.Contains(ScreenOperation, StringComparer.OrdinalIgnoreCase) Then
+                        Log($"Unknown screen operation: '{ScreenOperation}' opted for operation please try with allowed operations i.e. {String.Join(",", AllowedOperation)}. Use 'help' to see available commands.", LogLevel.Error)
+                        Return False
+                    End If
+                    Try
+                        IntTranNo = Convert.ToInt32(SanitizeInput(args(2)))
+                        TranNumber = IntTranNo.ToString().PadLeft(6, "0"c)
+                        If ValidateTranNo(TranNumber) Then
+                            Log($"You have opted for transaction no: '{TranNumber}'", LogLevel.Info)
+                        Else
+                            Log($"You cannot proceed for transaction no: '{TranNumber}'", LogLevel.Error)
+                            Return False
+                        End If
+                    Catch ex As Exception
+                        If SanitizeTranNo(TranNumber) Then
+                            Log($"You have opted for transaction no(html): '{TranNumber}'", LogLevel.Info)
+                        Else
+                            Log($"You cannot proceed for transaction no(html): '{TranNumber}'", LogLevel.Error)
+                            Return False
+                        End If
+                    End Try
+                    Try
+                        Dim _blcTranList As New HashSet(Of String)
+                        Dim _htmlFileNames() As String = Directory.GetFiles(validate.Canonicalize(DirectoryPath))
+                        For Each filePath As String In _htmlFileNames
+                            Dim fileNameWithoutExtension As String = Path.GetFileNameWithoutExtension(filePath)
+                            _blcTranList.Add(validate.Canonicalize(fileNameWithoutExtension))
+                        Next
+                        If Not _blcTranList.Contains(TranNumber) Then
+                            Log($"Opted Transaction: '{TranNumber}' is not exist in CBS", LogLevel.Error)
+                            Return False
+                        End If
+                    Catch ex As Exception
+                        Log($"❌ An unexpected error occurred while validating command: {ex.Message}{Environment.NewLine}{ex.StackTrace}", LogLevel.Error)
+                        Return False
+                    End Try
+                End If
+            End If
+            ' All checks passed
+        Catch ex As IndexOutOfRangeException
+            Log($"❌ An unexpected error occurred while validating command: {ex.Message}{Environment.NewLine}{ex.StackTrace}", LogLevel.Error)
+            Return False
+        Catch ex As Exception
+            Log($"❌ An unexpected error occurred while validating command: {ex.Message}{Environment.NewLine}{ex.StackTrace}", LogLevel.Error)
+            Return False
+        End Try
+        Return True
+    End Function
+
+    'To validate transaction number
+    Public Function ValidateTranNo(tranNo As String) As Boolean
+        Dim regexPattern As New Regex("^(?!0{6})\d{6}$")
+        If regexPattern.IsMatch(tranNo) Then
+            Return True
+        Else
+            Log($"If you opted for Numeric based transaction i.e. '{tranNo}' then it should contain only min(0) and max(6) digits and it should not contain all zeros", LogLevel.Error)
+            Return False
+        End If
+        Return True
+    End Function
+    Function SanitizeTranNo(tranNo As String) As Boolean
+        tranNo = SanitizeInput(tranNo)
+        Dim regPattern As New Regex("^[a-zA-Z0-9]*$")
+        If regPattern.IsMatch(tranNo) Then
+            Return True
+        Else
+            Log($"If you opted for Alpha/Aplha-Numeric based transaction i.e. '{tranNo}' then it should not contain any special characters", LogLevel.Error)
+            Return False
+        End If
+    End Function
+    Function SanitizeInput(input As String) As String
+        Return System.Security.SecurityElement.Escape(input)
+    End Function
+End Module
+
+Module UtilityMember
+    Public ReadOnly validate As New Owasp.Esapi.Encoder()
+    Private _nTranType As Boolean
+    Private _paddedTranNo As String
+    Private _expectedArgs As String
+    Private _operationMethod As String
+    Private _trantoExecute As String
+    Private _screenOperation As String
+    Private _nTranNo As String
+    Private _intTranNo As Int32
+    Private _requestedOperation As String
+    Private _requestedTran As String
+    Private ReadOnly _requestedNode As String = "ScreenNo"
+    Private ReadOnly _restrictedfileName As String = "BLC_Menu_Restriction.xml"
+    Private _directoryPath As String = ""
+    Private _dynamic_Path As String = ""
+    Private _basePath As String = ""
+    Private _dropdowndynamicPath As String = ""
+    ' List of allowed command names
+    Private _args As String()
+    Private ReadOnly _allowedCommands As String() = {"addtype", "deletetype", "changeparameter", "blockscreen", "help"}
+    Private ReadOnly _addDeleteTransaction As String() = {"67050", "7050", "NBC_FILEUPLOAD_TYPE", "NBC_ACCOUNT_INSURANCE_TYPE"}
+    Private ReadOnly _ristictArgs As String() = {".exe", ".js", ".vbs", ".htm", ".html", ".bat", ".php", ".com", ".xls", ".xlsx", ".pptx", ".zip", ".rar", ".7z", ".jpeg", ".lnk", ".png", ".mp3", ".mp4", ".dll", ".sql", ".vw", ".prc", ".xslt", ".htc", ".css"}
+    Private ReadOnly _allowedOperation As String() = {"add", "delete"}
+    Private ReadOnly _newRestrictedCharacters As String() = {"<", ">", "--", "&", "%%%%", "#", "'", "@@", "$$", "!!", "**", "^^", "((", "))", "{{", "}}", "???", "??", "``", "~~"}
+    Private ReadOnly _reservedNames As String() = {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        }
+    Public ReadOnly Property AllowedCommands As String()
+        Get
+            Return _allowedCommands
+        End Get
+    End Property
+    Public Property ConsoleArguments As String()
+        Get
+            Return _args
+        End Get
+        Set(ByVal value As String())
+            _args = value
+        End Set
+    End Property
+    Public ReadOnly Property AllowedFileNames As String()
+        Get
+            Return _addDeleteTransaction
+        End Get
+    End Property
+    Public ReadOnly Property AllowedOperation As String()
+        Get
+            Return _allowedOperation
+        End Get
+    End Property
+    Public ReadOnly Property RestrictedCharSet As String()
+        Get
+            Return _newRestrictedCharacters
+        End Get
+    End Property
+    Public ReadOnly Property ReverseNames As String()
+        Get
+            Return _reservedNames
+        End Get
+    End Property
+    Public ReadOnly Property ReaquestedFileNode As String
+        Get
+            Return _requestedNode
+        End Get
+    End Property
+    Public ReadOnly Property RestrictedFileName As String
+        Get
+            Return _restrictedfileName
+        End Get
+    End Property
+    Public ReadOnly Property RistrictedArguments As String()
+        Get
+            Return _ristictArgs
+        End Get
+    End Property
+    Public Property IntTranNo As Int32
+        Get
+            Return _intTranNo
+        End Get
+        Set(ByVal value As Int32)
+            _intTranNo = value
+        End Set
+    End Property
+    Public Property DropDownPath As String
+        Get
+            Return _dropdowndynamicPath
+        End Get
+        Set(ByVal value As String)
+            _dropdowndynamicPath = value
+        End Set
+    End Property
+    Public Property BasePath As String
+        Get
+            Return _basePath
+        End Get
+        Set(ByVal value As String)
+            _basePath = value
+        End Set
+    End Property
+    Public Property DynamicPath As String
+        Get
+            Return _dynamic_Path
+        End Get
+        Set(ByVal value As String)
+            _dynamic_Path = value
+        End Set
+    End Property
+    Public Property DirectoryPath As String
+        Get
+            Return _directoryPath
+        End Get
+        Set(ByVal value As String)
+            _directoryPath = value
+        End Set
+    End Property
+    Public Property RequestedTran As String
+        Get
+            Return _requestedTran
+        End Get
+        Set(ByVal value As String)
+            _requestedTran = value
+        End Set
+    End Property
+    Public Property RequestedOperation As String
+        Get
+            Return _requestedOperation
+        End Get
+        Set(ByVal value As String)
+            _requestedOperation = value
+        End Set
+    End Property
+    Public Property TranNumber As String
+        Get
+            Return _nTranNo
+        End Get
+        Set(ByVal value As String)
+            _nTranNo = value
+        End Set
+    End Property
+    Public Property ScreenOperation As String
+        Get
+            Return _screenOperation
+        End Get
+        Set(ByVal value As String)
+            _screenOperation = value
+        End Set
+    End Property
+    Public Property TranToExecute As String
+        Get
+            Return _trantoExecute
+        End Get
+        Set(ByVal value As String)
+            _trantoExecute = value
+        End Set
+    End Property
+    Public Property OperationMethod As String
+        Get
+            Return _operationMethod
+        End Get
+        Set(ByVal value As String)
+            _operationMethod = value
+        End Set
+    End Property
+    Public Property ExpectedArguments As String
+        Get
+            Return _expectedArgs
+        End Get
+        Set(ByVal value As String)
+            _expectedArgs = value
+        End Set
+    End Property
+    Public Property PaddedTranNo As String
+        Get
+            Return _paddedTranNo
+        End Get
+        Set(ByVal value As String)
+            _paddedTranNo = value
+        End Set
+    End Property
+    Public Property TranType As Boolean
+        Get
+            Return _nTranType
+        End Get
+        Set(ByVal value As Boolean)
+            _nTranType = value
+        End Set
+    End Property
+End Module
+Module UtilityBanner
+    ' Display Help Command
+    Sub ShowHelp()
+        Console.ForegroundColor = ConsoleColor.Green
+        Console.WriteLine("╔════════════════════════════════════════════╗")
+        Console.WriteLine("║          Dynamic File Utility Help         ║")
+        Console.WriteLine("╚════════════════════════════════════════════╝")
+        Console.ResetColor()
+
+        Log("Available commands:", LogLevel.Info)
+        Console.ForegroundColor = ConsoleColor.Yellow
+        Console.WriteLine("-------------------------------------------------------------------------------------------------------------------------------------------------------------------------")
+        Console.WriteLine("******************  Command  ****************** | ***********************************************   Command Description  ***********************************************")
+        Console.WriteLine("-------------------------------------------------------------------------------------------------------------------------------------------------------------------------")
+        Console.WriteLine("1. addtype <tran_no> <TYPE>                      → Add a <TYPE> or <FILETYPE> node to a file.")
+        Console.WriteLine("2. deletetype <tran_no> <TYPE>                   → Delete a <TYPE> or <FILETYPE> node from a file.")
+        Console.WriteLine("3. changeparameter <file> <param> <param_value>  → Change a parameter value in a file.")
+        Console.WriteLine("4. blockscreen <BlockType> <ScreenNo>            → To Add/Remove screen from discontinued transaction list for Bancslink.")
+        Console.WriteLine("5. help                                          → Display this help message.")
+        Console.WriteLine("")
+        Console.WriteLine("Note:   ")
+        Console.WriteLine("")
+        Console.WriteLine("  <TYPE>                                         → will be for the Dynamic files like 7050_Option.xml, 67050_Option.xml and NBC_ACCOUNT_INSURANCE_TYPE.xml")
+        Console.WriteLine("  <FILETYPE>                                     → will be for the Dynamic file NBC_FILEUPLOAD_TYPE.xml")
+        Console.WriteLine("  <BlockType>                                    → will be either Add/Delete")
+        Console.WriteLine("-------------------------------------------------------------------------------------------------------------------------------------------------------------------------")
+        Console.ResetColor()
+    End Sub
+    Sub PrintBanner()
+        Console.ForegroundColor = ConsoleColor.Magenta
+        Dim header As New String("="c, 55)
+        Console.WriteLine(header)
+        Console.WriteLine("         BLC Dynamic File Utility             ")
+        Console.WriteLine(header)
+        Console.WriteLine()
+        Console.WriteLine(header)
+        Console.WriteLine("         This is TCS B@ncs product            ")
+        Console.WriteLine("      designed for State Bank of India        ")
+        Console.WriteLine(header)
+        Console.ResetColor()
+    End Sub
+
+    Enum LogLevel
+        Info
+        Warning
+        [Error]
+    End Enum
+
+    Sub Log(message As String, level As LogLevel)
+        Select Case level
+            Case LogLevel.Info
+                Console.ForegroundColor = ConsoleColor.Cyan
+            Case LogLevel.Warning
+                Console.ForegroundColor = ConsoleColor.DarkYellow
+            Case LogLevel.Error
+                Console.ForegroundColor = ConsoleColor.Red
+        End Select
+        Dim prefix As String = $"[{level}] "
+        Console.WriteLine(prefix & message)
+        Console.ResetColor()
+    End Sub
+End Module
+Imports System.IO
+Imports System.Security
+Imports System.Text.RegularExpressions
+Imports System.Xml
+
+Module FileOperation
+    'Checking if directory is Created Or Not
+    Public Sub CheckPathDirectory(pathToCreate As String)
+        If Not Directory.Exists(pathToCreate) Then
+            Log($"❌ Direcotry not found, started creating directory: '{pathToCreate}'", LogLevel.Info)
+            Directory.CreateDirectory(pathToCreate)
+        End If
+    End Sub
+    Sub CreateBackup(filePath As String, Optional basePath As String = "")
+        Try
+            '(Path Manipulation)
+            filePath = validate.Canonicalize(filePath)
+            '(Path Manipulation)
+
+            If basePath <> "" AndAlso Not filePath.StartsWith(Path.GetFullPath(basePath), StringComparison.OrdinalIgnoreCase) Then
+                Log("Backup prevented: file outside allowed directory.", LogLevel.Error)
+                Return
+            End If
+            '(Path Manipulation)
+            Dim backupPath As String = validate.Canonicalize(Path.GetFullPath(Path.Combine(filePath & ".bak")))
+            '(Path Manipulation)
+
+            If File.Exists(backupPath) Then File.Delete(backupPath)
+            File.Copy(filePath, backupPath, True)
+            Log("Backup created successfully.", LogLevel.Info)
+
+        Catch ex As FileNotFoundException
+            Log($"❌ File not found: {ex.Message}", LogLevel.Error)
+        Catch ex As UnauthorizedAccessException
+            Log($"❌ Access denied: {ex.Message}", LogLevel.Error)
+        Catch ex As NullReferenceException
+            Log($"❌ Null-Point Exception found: {ex.Message}", LogLevel.Error)
+        Catch ex As Exception
+            Log($"Error creating backup with exception {ex.Message}", LogLevel.Error)
+        End Try
+
+    End Sub
+    Sub SaveXmlDocument(xmlDoc As XDocument, filePath As String, Optional basePath As String = "")
+        Try
+            '(Path Manipulation)
+            filePath = validate.Canonicalize(filePath)
+            '(Path Manipulation)
+
+            If basePath <> "" AndAlso Not filePath.StartsWith(Path.GetFullPath(basePath), StringComparison.OrdinalIgnoreCase) Then
+                Log("Save prevented: file outside allowed directory.", LogLevel.Error)
+                Return
+            End If
+
+            '(Path Manipulation)
+            Dim tempFile As String = validate.Canonicalize(Path.GetFullPath(Path.Combine(filePath & ".tmp")))
+            '(Path Manipulation)
+            tempFile = validate.Canonicalize(tempFile)
+
+            ' Force pretty-print formatting
+            Dim settings As New Xml.XmlWriterSettings With {
+            .Indent = True,
+            .IndentChars = "  ",   ' 2 spaces
+            .NewLineChars = vbCrLf,
+            .NewLineHandling = Xml.NewLineHandling.Replace,
+            .Encoding = System.Text.Encoding.UTF8,
+            .CloseOutput = True
+            }
+
+            Using writer As Xml.XmlWriter = Xml.XmlWriter.Create(tempFile, settings)
+                Dim formatted As XDocument = XDocument.Parse(xmlDoc.ToString(SaveOptions.None))
+                formatted.Save(writer)
+            End Using
+
+            If File.Exists(filePath) Then File.Delete(filePath)
+            File.Move(tempFile, filePath)
+
+            Log("Document saved successfully.", LogLevel.Info)
+
+        Catch ex As Exception
+            Log($"Error saving XML document: {ex.Message}", LogLevel.Error)
+        End Try
+    End Sub
+
+    'To check XML Injection
+    Function LoadXmlSafely(filePath As String) As XDocument
+        '(Path Manipulation)
+        filePath = validate.Canonicalize(Path.GetFullPath(filePath))
+        '(Path Manipulation)
+        Try
+            Dim goodSettingsws As New XmlReaderSettings With {
+                .DtdProcessing = DtdProcessing.Ignore,
+                .XmlResolver = Nothing,
+                .ValidationType = ValidationType.Schema,
+                .Schemas = New System.Xml.Schema.XmlSchemaSet(),
+                .MaxCharactersFromEntities = 1024,
+                .IgnoreComments = True
+            }
+            Using goodxmlreadws As XmlReader = XmlReader.Create(filePath, goodSettingsws)
+                Dim xmlDoc As XDocument = XDocument.Load(goodxmlreadws)
+                goodxmlreadws.Close()
+                Return xmlDoc
+            End Using
+        Catch ex As Exception
+            Log($"Error loading XML safely: {ex.Message}", LogLevel.Error)
+            Return Nothing
+        End Try
+    End Function
+
+    ' ===== Validate XML Node Name =====
+    Function IsSafeXmlName(name As String) As Boolean
+        '(Path Manipulation)
+        name = validate.Canonicalize(Path.GetFileName(name))
+        '(Path Manipulation)
+        Return Not String.IsNullOrWhiteSpace(name) AndAlso XmlConvert.VerifyName(name) IsNot Nothing
+    End Function
+
+    ' ===== Validate XML Node Value =====
+    Function IsSafeXmlValue(value As String) As Boolean
+        ' Reject control characters that can break XML
+        Return value IsNot Nothing AndAlso Not Regex.IsMatch(value, "[\x00-\x08\x0B\x0C\x0E-\x1F]")
+    End Function
+
+    Function IsValidPath(canonicalPath As String, basePath As String) As Boolean
+        Return canonicalPath.StartsWith(basePath, StringComparison.OrdinalIgnoreCase) AndAlso
+           canonicalPath.Equals(Path.GetFullPath(canonicalPath), StringComparison.OrdinalIgnoreCase)
+    End Function
+    ' Handle Adding a Type Node
+    Sub HandleAddType(args As String())
+        If args.Length = 3 Then
+            Dim tranNo As String = args(1)
+            Dim typeValue As String = SanitizeInput(args(2))
+            If tranNo = "NBC_FILEUPLOAD_TYPE" Then
+                If CaptureDropDownValues(tranNo, typeValue) Then
+                    ModifyFileTypeNode(tranNo, typeValue, add:=True)
+                Else
+                    Log($"Invalid arguments for addtype command, for dyanmic file {tranNo} provided <FILETYPE> '{typeValue}' is not valid.", LogLevel.Error)
+                    Return
+                End If
+            ElseIf (tranNo = "67050" Or tranNo = "7050") Then
+                If CaptureDropDownValues(tranNo, typeValue) Then
+                    ModifyTypeNode(tranNo, typeValue, add:=True)
+                Else
+                    Log($"Invalid arguments for addtype command, for dyanmic file {tranNo} provided <TYPE> '{typeValue}' is not valid.", LogLevel.Error)
+                    Return
+                End If
+            Else
+                If CaptureDropDownValues(tranNo, typeValue) Then
+                    ModifyTypeNodeother(tranNo, typeValue, add:=True)
+                Else
+                    Log($"Invalid arguments for addtype command, for dyanmic file {tranNo} provided <TYPE> '{typeValue}' is not valid.", LogLevel.Error)
+                    Return
+                End If
+            End If
+        Else
+            Log("Invalid arguments for addtype command.", LogLevel.Error)
+        End If
+    End Sub
+
+    ' Handle Deleting a Type Node
+    Sub HandleDeleteType(args As String())
+        If args.Length = 3 Then
+            Dim tranNo As String = args(1)
+            Dim typeValue As String = SanitizeInput(args(2))
+            If tranNo = "NBC_FILEUPLOAD_TYPE" Then
+                ModifyFileTypeNode(tranNo, typeValue, add:=False)
+            ElseIf (tranNo = "67050" OrElse tranNo = "7050") Then
+                ModifyTypeNode(tranNo, typeValue, add:=False)
+            Else
+                ModifyTypeNodeother(tranNo, typeValue, add:=False)
+            End If
+        Else
+            Log("Invalid arguments for deletetype command.", LogLevel.Error)
+        End If
+    End Sub
+
+    ' Handle Changing Parameters in Specific Files
+    Sub HandleChangeParameter(args As String())
+        '(Path Manipulation)
+        Dim fileName As String = validate.Canonicalize(Path.GetFileName(args(1)))
+        '(Path Manipulation)
+        Dim parameterName As String = SanitizeInput(args(2))
+        Dim parameterValue As String = SanitizeInput(args(3))
+        If fileName = "timeout.Config" OrElse fileName = "timegap.Config" Then
+            ChangeParameter(fileName, BasePath, parameterName, parameterValue)
+        Else
+            ChangeParameter(fileName, DynamicPath, parameterName, parameterValue)
+        End If
+    End Sub
+
+    ' Modify <TYPE> Nodes for Files like 67050 and 7050
+    Sub ModifyTypeNode(tranNo As String, typeValue As String, add As Boolean)
+        Dim filePath As String
+        Dim canonicalFullPath As String
+        Dim fileName As String = validate.Canonicalize(tranNo & "_Option.xml")
+        Dim targetPath As String = validate.Canonicalize(Path.Combine(DynamicPath, fileName))
+
+        If Not targetPath.StartsWith(DynamicPath, StringComparison.OrdinalIgnoreCase) Then
+            Throw New UnauthorizedAccessException("Invalid file path attempt detected.")
+            Return
+        End If
+        '(Path Manipulation: Base Path Overwriting)
+
+        Try
+            '(Path Manipulation: Base Path Overwriting)
+            filePath = validate.Canonicalize(Path.GetFullPath(targetPath))
+            '(Path Manipulation: Base Path Overwriting)
+
+            '(Path Manipulation)
+            canonicalFullPath = validate.Canonicalize(Path.GetFullPath(filePath))
+            '(Path Manipulation)
+
+            If Not IsValidPath(canonicalFullPath, DynamicPath) Then
+                Log("Invalid File Name or Path Manipulation detected.", LogLevel.Error)
+                Return
+            End If
+        Catch ex As FileNotFoundException
+            Log($"❌ File not found: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As UnauthorizedAccessException
+            Log($"❌ Access denied: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As NullReferenceException
+            Log($"❌ Null-Point Exception found: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As Exception
+            Log($"❌ Exception occured : {ex.Message}", LogLevel.Error)
+            Return
+        End Try
+        '(Checking escape characters)
+        typeValue = SanitizeInput(typeValue)
+        '(Checking escape characters)
+        ModifyNode(filePath, "TYPE", typeValue, add)
+    End Sub
+
+    ' Modify <TYPE> Nodes for Files other than 67050 and 7050
+    Sub ModifyTypeNodeother(tranNo As String, typeValue As String, add As Boolean)
+        Dim filePath As String
+        Dim canonicalFullPath As String
+        Dim fileName As String = validate.Canonicalize(tranNo & ".xml")
+        Dim targetPath As String = validate.Canonicalize(Path.Combine(DynamicPath, fileName))
+        If Not targetPath.StartsWith(DynamicPath, StringComparison.OrdinalIgnoreCase) Then
+            Throw New UnauthorizedAccessException("Invalid file path attempt detected.")
+            Return
+        End If
+        '(Path Manipulation: Base Path Overwriting)
+        Try
+            '(Path Manipulation)
+            filePath = validate.Canonicalize(Path.GetFullPath(targetPath))
+            '(Path Manipulation)
+
+            '(Path Manipulation)
+            canonicalFullPath = validate.Canonicalize(Path.GetFullPath(filePath))
+            '(Path Manipulation)
+
+            If Not IsValidPath(canonicalFullPath, DynamicPath) Then
+                Log("Invalid File Name or Path Manipulation detected.", LogLevel.Error)
+                Return
+            End If
+        Catch ex As FileNotFoundException
+            Log($"❌ File not found: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As UnauthorizedAccessException
+            Log($"❌ Access denied: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As NullReferenceException
+            Log($"❌ Null-Point Exception found: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As Exception
+            Log($"❌ Exception occured : {ex.Message}", LogLevel.Error)
+            Return
+        End Try
+        '(Checking escape characters)
+        typeValue = SanitizeInput(typeValue)
+        '(Checking escape characters)
+        ModifyNode(filePath, "TYPE", typeValue, add)
+    End Sub
+
+    ' Modify <FILETYPE> Nodes for NBC_FILEUPLOAD_TYPE.xml
+    Sub ModifyFileTypeNode(tranNo As String, fileTypeValue As String, add As Boolean)
+        Dim filePath As String
+        Dim canonicalFullPath As String
+        Dim fileName As String = validate.Canonicalize(tranNo & ".xml")
+        Dim targetPath As String = validate.Canonicalize(Path.Combine(DynamicPath, fileName))
+
+        If Not targetPath.StartsWith(DynamicPath, StringComparison.OrdinalIgnoreCase) Then
+            Throw New UnauthorizedAccessException("Invalid file path attempt detected.")
+            Return
+        End If
+        '(Path Manipulation: Base Path Overwriting)
+        Try
+            '(Path Manipulation)
+            filePath = validate.Canonicalize(Path.GetFullPath(targetPath))
+            '(Path Manipulation)
+
+            '(Path Manipulation)
+            canonicalFullPath = validate.Canonicalize(Path.GetFullPath(filePath))
+            '(Path Manipulation)
+
+            If Not IsValidPath(canonicalFullPath, DynamicPath) Then
+                Log("Invalid File Name or Path Manipulation detected.", LogLevel.Error)
+                Return
+            End If
+        Catch ex As UnauthorizedAccessException
+            Log($"❌ Access denied: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As NullReferenceException
+            Log($"❌ Null-Point Exception found: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As Exception
+            Log($"❌ Exception occured : {ex.Message}", LogLevel.Error)
+            Return
+        End Try
+        '(Checking escape characters)
+        fileTypeValue = SanitizeInput(fileTypeValue)
+        '(Checking escape characters)
+        ModifyNode(filePath, "FILETYPE", fileTypeValue, add)
+    End Sub
+
+    ' General Method to Modify Nodes
+    Sub ModifyNode(filePath As String, nodeName As String, nodeValue As String, add As Boolean)
+        Try
+            '(Path Manipulation)
+            filePath = validate.Canonicalize(filePath)
+            '(Path Manipulation)
+            If Not File.Exists(filePath) Then
+                Log($"File '{filePath}' does not exist.", LogLevel.Error)
+                Return
+            End If
+            CreateBackup(filePath)
+            ' Secure XML load
+            Dim xmlDoc As XDocument = LoadXmlSafely(filePath)
+            Dim typesNode As XElement = xmlDoc.Descendants("TYPES").FirstOrDefault()
+            If typesNode Is Nothing Then
+                Log("<TYPES> node not found.", LogLevel.Error)
+                Return
+            End If
+            ' Validate node name and value
+            If Not IsSafeXmlName(nodeName) Then
+                Log($"Invalid node name '{nodeName}' detected.", LogLevel.Error)
+                Return
+            End If
+            If Not IsSafeXmlValue(nodeValue) Then
+                Log($"Invalid node value '{nodeValue}' detected.", LogLevel.Error)
+                Return
+            End If
+            If add Then
+                AddNode(typesNode, nodeName, nodeValue, filePath)
+            Else
+                DeleteNode(typesNode, nodeName, nodeValue, filePath)
+            End If
+        Catch ex As Exception
+            Log($"Error modifying node: {ex.Message}", LogLevel.Error)
+        End Try
+    End Sub
+
+    ' Add a Node
+    Sub AddNode(parentNode As XElement, nodeName As String, nodeValue As String, filePath As String)
+        '(Path Manipulation)
+        filePath = validate.Canonicalize(Path.GetFullPath(filePath))
+        '(Path Manipulation)
+        Dim existingNode = parentNode.Elements(nodeName).FirstOrDefault(Function(e) e.Value = nodeValue)
+        If existingNode IsNot Nothing Then
+            Log($"{nodeName} '{nodeValue}' already exists.", LogLevel.Warning)
+        Else
+            parentNode.Add(New XElement(nodeName, nodeValue))
+            SaveXmlDocument(parentNode.Document, filePath)
+            Log($"{nodeName} '{nodeValue}' added successfully.", LogLevel.Info)
+        End If
+    End Sub
+
+    ' Delete a Node
+    Sub DeleteNode(parentNode As XElement, nodeName As String, nodeValue As String, filePath As String)
+        '(Path Manipulation)
+        filePath = validate.Canonicalize(Path.GetFullPath(filePath))
+        '(Path Manipulation)
+        Dim existingNode = parentNode.Elements(nodeName).FirstOrDefault(Function(e) e.Value = nodeValue)
+        If existingNode Is Nothing Then
+            Log($"{nodeName} '{nodeValue}' not found.", LogLevel.Warning)
+        Else
+            existingNode.Remove()
+            SaveXmlDocument(parentNode.Document, filePath)
+            Log($"{nodeName} '{nodeValue}' deleted successfully.", LogLevel.Info)
+        End If
+    End Sub
+
+    ' Change Parameter Values in Files
+    Sub ChangeParameter(fileName As String, dynamic_Path As String, parameterName As String, parameterValue As String)
+        Try
+            '(Path Manipulation: Base Path Overwriting)
+
+            dynamic_Path = validate.Canonicalize(dynamic_Path)
+            fileName = validate.Canonicalize(fileName)
+            Dim filePath = validate.Canonicalize(Path.Combine(dynamic_Path, fileName))
+
+            If Not filePath.StartsWith(dynamic_Path, StringComparison.OrdinalIgnoreCase) Then
+                Throw New UnauthorizedAccessException("Invalid file path attempt detected.")
+                Return
+            End If
+
+            '(Path Manipulation: Base Path Overwriting)
+
+            '(Path Manipulation)
+            Dim canonicalFullPath As String = validate.Canonicalize(Path.GetFullPath(filePath))
+            '(Path Manipulation)
+
+            If Not IsValidPath(canonicalFullPath, dynamic_Path) Then
+                Log("Invalid File Name or Path Manipulation detected.", LogLevel.Error)
+                Return
+            End If
+
+            If Not File.Exists(filePath) Then
+                Log($"File '{filePath}' does not exist.", LogLevel.Error)
+                Return
+            End If
+
+            CreateBackup(filePath)
+
+            Dim xmlDoc As XDocument = LoadXmlSafely(filePath)
+            If xmlDoc IsNot Nothing Then
+                ' Validate parameter
+                If Not IsSafeXmlName(parameterName) Then
+                    Log($"Invalid parameter name '{parameterName}' detected.", LogLevel.Error)
+                    Return
+                End If
+
+                If Not IsSafeXmlValue(parameterValue) Then
+                    Log($"Invalid parameter value '{parameterValue}' detected.", LogLevel.Error)
+                    Return
+                End If
+
+                Dim parameterNode As XElement = xmlDoc.Descendants(parameterName).FirstOrDefault()
+                If parameterNode Is Nothing Then
+                    Log($"Parameter '{parameterName}' not found.", LogLevel.Warning)
+                Else
+                    If parameterNode.Value <> parameterValue Then
+                        parameterNode.Value = parameterValue
+
+                        SaveXmlDocument(xmlDoc, filePath)
+                        Log($"Parameter '{parameterName}' updated successfully.", LogLevel.Info)
+                    Else
+                        Log($"Entered value '{parameterValue}' of node '{parameterName}' which is being passed as parameter_value for entered file should not be same as existing node's value.", LogLevel.Error)
+                    End If
+
+                End If
+            End If
+        Catch ex As Exception
+            Log($"Error changing parameter: {ex.Message}", LogLevel.Error)
+        End Try
+    End Sub
+    Sub UpdateBlackListedTransaction(args As String())
+        Try
+            Dim targetPath As String = validate.Canonicalize(Path.Combine(DynamicPath, RestrictedFileName))
+            Dim nTranNo As Int32
+            If Not targetPath.StartsWith(DynamicPath, StringComparison.OrdinalIgnoreCase) Then
+                Throw New UnauthorizedAccessException("Invalid file path attempt detected.")
+                Return
+            End If
+            RequestedOperation = SanitizeInput(args(1).ToLower())
+            RequestedTran = SanitizeInput(args(2))
+            CreateBackup(targetPath)
+            ' Secure XML load
+            Dim xmlDoc As XDocument = LoadXmlSafely(targetPath)
+            Dim typesNode As XElement = xmlDoc.Descendants("Screens").FirstOrDefault()
+            If typesNode Is Nothing Then
+                Log("<Screens> node not found.", LogLevel.Error)
+                Return
+            End If
+            ' Validate node name and value
+            If Not IsSafeXmlName(ReaquestedFileNode) Then
+                Log($"Invalid node name '{ReaquestedFileNode}' detected.", LogLevel.Error)
+                Return
+            End If
+            If Not IsSafeXmlValue(RequestedTran) Then
+                Log($"Invalid node value '{RequestedTran}' detected.", LogLevel.Error)
+                Return
+            End If
+            Try
+                nTranNo = Int32.Parse(RequestedTran)
+                PaddedTranNo = nTranNo.ToString().PadLeft(6, "0"c)
+                TranType = True
+            Catch ex As Exception
+                TranType = False
+            End Try
+            Select Case RequestedOperation
+                Case "add"
+                    If TranType Then
+                        Dim addingNode = typesNode.Elements(ReaquestedFileNode).FirstOrDefault(Function(e) e.Value = PaddedTranNo)
+                        If addingNode IsNot Nothing Then
+                            Log($"{ReaquestedFileNode} '{PaddedTranNo}' already exists.", LogLevel.Warning)
+                        Else
+                            typesNode.Add(New XElement(ReaquestedFileNode, PaddedTranNo))
+                            SaveXmlDocument(typesNode.Document, targetPath)
+                            Log($"{ReaquestedFileNode} '{PaddedTranNo}' added successfully.", LogLevel.Info)
+                        End If
+                    Else
+                        Dim addingNode = typesNode.Elements(ReaquestedFileNode).FirstOrDefault(Function(e) e.Value = RequestedTran)
+                        If addingNode IsNot Nothing Then
+                            Log($"{ReaquestedFileNode} '{RequestedTran}' already exists.", LogLevel.Warning)
+                        Else
+                            typesNode.Add(New XElement(ReaquestedFileNode, RequestedTran))
+                            SaveXmlDocument(typesNode.Document, targetPath)
+                            Log($"{ReaquestedFileNode} '{RequestedTran}' added successfully.", LogLevel.Info)
+                        End If
+                    End If
+
+                Case "delete"
+                    If TranType Then
+                        Dim nodetobeDeleted = typesNode.Elements(ReaquestedFileNode).FirstOrDefault(Function(e) e.Value = PaddedTranNo)
+                        If nodetobeDeleted Is Nothing Then
+                            Log($"{ReaquestedFileNode} '{PaddedTranNo}' not found.", LogLevel.Warning)
+                        Else
+                            nodetobeDeleted.Remove()
+                            SaveXmlDocument(typesNode.Document, targetPath)
+                            Log($"{ReaquestedFileNode} '{PaddedTranNo}' deleted successfully.", LogLevel.Info)
+                        End If
+                    Else
+                        Dim nodetobeDeleted = typesNode.Elements(ReaquestedFileNode).FirstOrDefault(Function(e) e.Value = RequestedTran)
+                        If nodetobeDeleted Is Nothing Then
+                            Log($"{ReaquestedFileNode} '{RequestedTran}' not found.", LogLevel.Warning)
+                        Else
+                            nodetobeDeleted.Remove()
+                            SaveXmlDocument(typesNode.Document, targetPath)
+                            Log($"{ReaquestedFileNode} '{RequestedTran}' deleted successfully.", LogLevel.Info)
+                        End If
+                    End If
+
+                Case Else
+                    Log($"Invalid File Operation Opted", LogLevel.Error)
+                    Return
+            End Select
+
+        Catch ex As FileNotFoundException
+            Log($"❌ File not found: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As UnauthorizedAccessException
+            Log($"❌ Access denied: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As NullReferenceException
+            Log($"❌ Null-Point Exception found: {ex.Message}", LogLevel.Error)
+            Return
+        Catch ex As Exception
+            Log($"❌ Exception occured : {ex.Message}", LogLevel.Error)
+            Return
+
+        End Try
+    End Sub
+
+    'Storing DropDownValues for 67050,7050,69004
+    Function CaptureDropDownValues(tranNo As String, dropdownValue As String, Optional basePath As String = "") As Boolean
+        Try
+            Try
+                If basePath <> "" AndAlso Not DropDownPath.StartsWith(Path.GetFullPath(basePath), StringComparison.Ordinal) Then
+                    Log("Access prevented: file outside allowed directory.", LogLevel.Error)
+                    Return False
+                End If
+            Catch ex As FileNotFoundException
+                Log($"❌ File not found: {ex.Message}", LogLevel.Error)
+                Return False
+            Catch ex As UnauthorizedAccessException
+                Log($"❌ Access denied: {ex.Message}", LogLevel.Error)
+                Return False
+            Catch ex As NullReferenceException
+                Log($"❌ Null-Point Exception found: {ex.Message}", LogLevel.Error)
+                Return False
+            Catch ex As Exception
+                Log($"Error while capturing dynamic path for comparing values for {tranNo}: " & ex.Message, LogLevel.Error)
+                Return False
+            End Try
+            Try
+                ' Determine file based on tranNo
+                Dim targetPath As String = ""
+                Dim fileName As String = ""
+                Select Case tranNo
+                    Case "67050"
+                        '(Path Manipulation)
+                        fileName = validate.Canonicalize("optcode1.htm")
+                        targetPath = validate.Canonicalize(Path.GetFullPath(Path.Combine(DropDownPath, fileName)))
+                        If Not targetPath.StartsWith(DropDownPath, StringComparison.OrdinalIgnoreCase) Then
+                            Throw New UnauthorizedAccessException($"Invalid file path attempt detected for '{tranNo}', please contact system administrator")
+                            Return False
+                        End If
+                        '(Path Manipulation)
+                    Case "7050"
+                        '(Path Manipulation)
+                        fileName = validate.Canonicalize("optcode4.htm")
+                        targetPath = validate.Canonicalize(Path.GetFullPath(Path.Combine(DropDownPath, fileName)))
+                        If Not targetPath.StartsWith(DropDownPath, StringComparison.OrdinalIgnoreCase) Then
+                            Throw New UnauthorizedAccessException($"Invalid file path attempt detected for '{tranNo}', please contact system administrator")
+                            Return False
+                        End If
+                        '(Path Manipulation)
+                    Case "NBC_FILEUPLOAD_TYPE"
+                        '(Path Manipulation)
+                        fileName = validate.Canonicalize("uploadTypeNew.htm")
+                        targetPath = validate.Canonicalize(Path.GetFullPath(Path.Combine(DropDownPath, fileName)))
+                        If Not targetPath.StartsWith(DropDownPath, StringComparison.OrdinalIgnoreCase) Then
+                            Throw New UnauthorizedAccessException($"Invalid file path attempt detected for '{tranNo}', please contact system administrator")
+                            Return False
+                        End If
+                        '(Path Manipulation)
+                    Case "NBC_ACCOUNT_INSURANCE_TYPE"
+                        '(Path Manipulation)
+                        fileName = validate.Canonicalize("system2.htm")
+                        targetPath = validate.Canonicalize(Path.GetFullPath(Path.Combine(DropDownPath, fileName)))
+                        If Not targetPath.StartsWith(DropDownPath, StringComparison.OrdinalIgnoreCase) Then
+                            Throw New UnauthorizedAccessException($"Invalid file path attempt detected for '{tranNo}', please contact system administrator")
+                            Return False
+                        End If
+                        '(Path Manipulation)
+                    Case Else
+                        Log("Invalid transaction number.", LogLevel.Error)
+                        Return False
+                End Select
+
+                ' Check if file exists
+                If Not File.Exists(targetPath) Then
+                    Log($"File for entered tran_no '{tranNo}' does not exist, Please contact system administrator", LogLevel.Error)
+                    Return False
+                End If
+
+                ' Read file as plain text
+                Dim fileContent As String = File.ReadAllText(targetPath)
+
+                ' Use regex to safely extract all OPTION values (case-insensitive tag, but capture raw value)
+                Dim optionRegex As New Text.RegularExpressions.Regex("(?i)<option\s+[^>]*\bvalue\s*=\s*""([^""]*)""")
+                Dim matches = optionRegex.Matches(fileContent)
+
+                Dim optionValues As New HashSet(Of String)()
+                For Each m As Text.RegularExpressions.Match In matches
+                    ' DO NOT trim or lowercase -> strict match required
+                    optionValues.Add(m.Groups(1).Value)
+                Next
+
+                ' Strict match: case + whitespace must be exact
+                If optionValues.Contains(dropdownValue) Then
+                    Return True
+                Else
+                    Log($"Argument value '{dropdownValue}' not as per the option_file of '{tranNo}'.", LogLevel.Error)
+                    Return False
+                End If
+            Catch ex As Exception
+                Log($"Error while comparing argument value with existing system value for {tranNo}: " & ex.Message, LogLevel.Error)
+                Return False
+            End Try
+        Catch ex As Exception
+            Log($"Error while comparing argument value with existing system value for {tranNo}: " & ex.Message, LogLevel.Error)
+            Return False
+        End Try
+    End Function
+    Function CheckForDynamicPath() As Boolean
+        Try
+            DynamicPath = validate.Canonicalize(Path.GetFullPath(Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory & ".." & Path.DirectorySeparatorChar & "xml" & Path.DirectorySeparatorChar & "Settings")))
+            CheckPathDirectory(DynamicPath)
+            DirectoryPath = validate.Canonicalize(Path.GetFullPath(Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory & ".." & Path.DirectorySeparatorChar & "html")))
+            CheckPathDirectory(DirectoryPath)
+            BasePath = validate.Canonicalize(Path.GetFullPath(Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory & ".." & Path.DirectorySeparatorChar)))
+            CheckPathDirectory(BasePath)
+            DropDownPath = validate.Canonicalize(Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory & ".." & Path.DirectorySeparatorChar & "html" & Path.DirectorySeparatorChar & "DropDownLists")))
+            CheckPathDirectory(DropDownPath)
+            Return True
+        Catch ex As FileNotFoundException
+            Log($"❌ File not found: {ex.Message}", LogLevel.Error)
+            Return False
+        Catch ex As UnauthorizedAccessException
+            Log($"❌ Access denied: {ex.Message}", LogLevel.Error)
+            Return False
+        Catch ex As NullReferenceException
+            Log($"❌ Null-Point Exception found: {ex.Message}", LogLevel.Error)
+            Return False
+        Catch ex As Exception
+            Log($"❌ An unexpected error occurred: {ex.Message}{Environment.NewLine}{ex.StackTrace}", LogLevel.Error)
+            Return False
+        End Try
+        Return True
+    End Function
+End Module
