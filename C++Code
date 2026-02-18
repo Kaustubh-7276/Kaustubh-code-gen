@@ -1,0 +1,153 @@
+Microsoft (R) COFF/PE Dumper Version 14.44.35220.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file EasyPrinter.dll
+
+PE signature found
+
+File Type: DLL
+
+FILE HEADER VALUES
+             14C machine (x86)
+               5 number of sections
+        5BDFE3A3 time date stamp Mon Nov  5 12:00:59 2018
+               0 file pointer to symbol table
+               0 number of symbols
+              E0 size of optional header
+            2102 characteristics
+                   Executable
+                   32 bit word machine
+                   DLL
+
+OPTIONAL HEADER VALUES
+             10B magic # (PE32)
+           10.00 linker version
+           17C00 size of code
+            AC00 size of initialized data
+               0 size of uninitialized data
+            78C8 entry point (100078C8)
+            1000 base of code
+           19000 base of data
+        10000000 image base (10000000 to 10025FFF)
+            1000 section alignment
+             200 file alignment
+            5.01 operating system version
+            0.00 image version
+            5.01 subsystem version
+               0 Win32 version
+           26000 size of image
+             400 size of headers
+               0 checksum
+               2 subsystem (Windows GUI)
+             140 DLL characteristics
+                   Dynamic base
+                   NX compatible
+          100000 size of stack reserve
+            1000 size of stack commit
+          100000 size of heap reserve
+            1000 size of heap commit
+               0 loader flags
+              10 number of directories
+           1E350 [     1D0] RVA [size] of Export Directory
+           1DA80 [      50] RVA [size] of Import Directory
+           23000 [     1F8] RVA [size] of Resource Directory
+               0 [       0] RVA [size] of Exception Directory
+               0 [       0] RVA [size] of Certificates Directory
+           24000 [    1400] RVA [size] of Base Relocation Directory
+           191F0 [      1C] RVA [size] of Debug Directory
+               0 [       0] RVA [size] of Architecture Directory
+               0 [       0] RVA [size] of Global Pointer Directory
+               0 [       0] RVA [size] of Thread Storage Directory
+           1C4B0 [      40] RVA [size] of Load Configuration Directory
+               0 [       0] RVA [size] of Bound Import Directory
+           19000 [     190] RVA [size] of Import Address Table Directory
+               0 [       0] RVA [size] of Delay Import Directory
+               0 [       0] RVA [size] of COM Descriptor Directory
+               0 [       0] RVA [size] of Reserved Directory
+
+
+SECTION HEADER #1
+   .text name
+   17A8A virtual size
+    1000 virtual address (10001000 to 10018A89)
+   17C00 size of raw data
+     400 file pointer to raw data (00000400 to 00017FFF)
+       0 file pointer to relocation table
+       0 file pointer to line numbers
+       0 number of relocations
+       0 number of line numbers
+60000020 flags
+         Code
+         Execute Read
+
+SECTION HEADER #2
+  .rdata name
+    5520 virtual size
+   19000 virtual address (10019000 to 1001E51F)
+    5600 size of raw data
+   18000 file pointer to raw data (00018000 to 0001D5FF)
+       0 file pointer to relocation table
+       0 file pointer to line numbers
+       0 number of relocations
+       0 number of line numbers
+40000040 flags
+         Initialized Data
+         Read Only
+
+  Debug Directories
+
+        Time Type        Size      RVA  Pointer
+    -------- ------- -------- -------- --------
+    5BDFE3A3 cv            4A 0001C4F8    1B4F8    Format: RSDS, {6FFF3660-E8F2-45B2-A0C3-45D48CF6A263}, 2, D:\Static_EasyPrinter\EasyPrinter\EasyPrinter.pdb
+
+SECTION HEADER #3
+   .data name
+    33E4 virtual size
+   1F000 virtual address (1001F000 to 100223E3)
+    1600 size of raw data
+   1D600 file pointer to raw data (0001D600 to 0001EBFF)
+       0 file pointer to relocation table
+       0 file pointer to line numbers
+       0 number of relocations
+       0 number of line numbers
+C0000040 flags
+         Initialized Data
+         Read Write
+
+SECTION HEADER #4
+   .rsrc name
+     1F8 virtual size
+   23000 virtual address (10023000 to 100231F7)
+     200 size of raw data
+   1EC00 file pointer to raw data (0001EC00 to 0001EDFF)
+       0 file pointer to relocation table
+       0 file pointer to line numbers
+       0 number of relocations
+       0 number of line numbers
+40000040 flags
+         Initialized Data
+         Read Only
+
+SECTION HEADER #5
+  .reloc name
+    1E42 virtual size
+   24000 virtual address (10024000 to 10025E41)
+    2000 size of raw data
+   1EE00 file pointer to raw data (0001EE00 to 00020DFF)
+       0 file pointer to relocation table
+       0 file pointer to line numbers
+       0 number of relocations
+       0 number of line numbers
+42000040 flags
+         Initialized Data
+         Discardable
+         Read Only
+
+  Summary
+
+        4000 .data
+        6000 .rdata
+        2000 .reloc
+        1000 .rsrc
+       18000 .text
