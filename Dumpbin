@@ -1,0 +1,185 @@
+C:\>"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe" /imports EasyPrinter.dll
+Microsoft (R) COFF/PE Dumper Version 14.44.35220.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file EasyPrinter.dll
+
+File Type: DLL
+
+  Section contains the following imports:
+
+    KERNEL32.dll
+              10019020 Import Address Table
+              1001DAF0 Import Name Table
+                     0 time date stamp
+                     0 Index of first forwarder reference
+
+                  202 GetLastError
+                  1B7 GetConsoleWindow
+                  453 SetEndOfFile
+                  456 SetEnvironmentVariableA
+                   64 CompareStringW
+                   8F CreateFileW
+                   88 CreateFileA
+                   A4 CreateProcessA
+                  4F9 WaitForSingleObject
+                  1DF GetExitCodeProcess
+                  524 WriteConsoleW
+                  2EF InterlockedIncrement
+                  2EB InterlockedDecrement
+                   EA EncodePointer
+                   CA DecodePointer
+                  4B2 Sleep
+                  2E2 InitializeCriticalSection
+                   D1 DeleteCriticalSection
+                   EE EnterCriticalSection
+                  339 LeaveCriticalSection
+                  2CF HeapFree
+                  2CB HeapAlloc
+                  367 MultiByteToWideChar
+                   D3 DeleteFileA
+                  1C5 GetCurrentThreadId
+                  186 GetCommandLineA
+                  3B1 RaiseException
+                  418 RtlUnwind
+                  511 WideCharToMultiByte
+                  32D LCMapStringW
+                  172 GetCPInfo
+                  4C0 TerminateProcess
+                  1C0 GetCurrentProcess
+                  4D3 UnhandledExceptionFilter
+                  4A5 SetUnhandledExceptionFilter
+                  300 IsDebuggerPresent
+                  2CD HeapCreate
+                  2CE HeapDestroy
+                  245 GetProcAddress
+                  218 GetModuleHandleW
+                  119 ExitProcess
+                  525 WriteFile
+                  264 GetStdHandle
+                  214 GetModuleFileNameW
+                  168 GetACP
+                  237 GetOEMCP
+                  30A IsValidCodePage
+                  4C5 TlsAlloc
+                  4C7 TlsGetValue
+                  4C8 TlsSetValue
+                  4C6 TlsFree
+                  473 SetLastError
+                  46F SetHandleCount
+                  2E3 InitializeCriticalSectionAndSpinCount
+                  1F3 GetFileType
+                  263 GetStartupInfoW
+                  304 IsProcessorFeaturePresent
+                  3C0 ReadFile
+                  466 SetFilePointer
+                  19A GetConsoleCP
+                  1AC GetConsoleMode
+                  157 FlushFileBuffers
+                  1E5 GetFileAttributesA
+                   52 CloseHandle
+                  213 GetModuleFileNameA
+                  161 FreeEnvironmentStringsW
+                  1DA GetEnvironmentStringsW
+                  3A7 QueryPerformanceCounter
+                  293 GetTickCount
+                  1C1 GetCurrentProcessId
+                  279 GetSystemTimeAsFileTime
+                  206 GetLocaleInfoW
+                  2D4 HeapSize
+                  29B GetUserDefaultLCID
+                  204 GetLocaleInfoA
+                  10D EnumSystemLocalesA
+                  30C IsValidLocale
+                  269 GetStringTypeW
+                  2D2 HeapReAlloc
+                  33F LoadLibraryW
+                  487 SetStdHandle
+                  24A GetProcessHeap
+
+    GDI32.dll
+              10019000 Import Address Table
+              1001DAD0 Import Name Table
+                     0 time date stamp
+                     0 Index of first forwarder reference
+
+                  2B9 TextOutW
+                  2B2 StartPage
+                  2B0 StartDocW
+                   32 CreateDCW
+                   EF EndDoc
+                   E3 DeleteDC
+                   F2 EndPage
+
+    WINSPOOL.DRV
+              1001916C Import Address Table
+              1001DC3C Import Name Table
+                     0 time date stamp
+                     0 Index of first forwarder reference
+
+                   51 EndDocPrinter
+                   B6 StartDocPrinterW
+                   BC WritePrinter
+                   56 EnumJobsW
+                   87 GetPrinterW
+                   90 OpenPrinterW
+                   4E DocumentPropertiesW
+                   1D ClosePrinter
+
+  Summary
+
+        4000 .data
+        6000 .rdata
+        2000 .reloc
+        1000 .rsrc
+       18000 .text
+
+C:\>"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe" /exports EasyPrinter.dll
+Microsoft (R) COFF/PE Dumper Version 14.44.35220.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file EasyPrinter.dll
+
+File Type: DLL
+
+  Section contains the following exports for EasyPrinter.dll
+
+    00000000 characteristics
+    5BDFE3A2 time date stamp Mon Nov  5 12:00:58 2018
+        0.00 version
+           1 ordinal base
+          16 number of functions
+          16 number of names
+
+    ordinal hint RVA      name
+
+          5    0 00001000 GetPrinterDC
+         16    1 00004420 checkInitValues
+         14    2 00001110 closePrinterConnection
+          3    3 00001190 connectPrinter
+         11    4 000019F0 convertRTFToText
+          8    5 00004980 endDocument
+         15    6 00004990 initializeDoc
+         12    7 00001A50 makeAbsolutePath
+          1    8 00004460 printPassbook
+         13    9 00003E40 sendFileToPrinter
+          4    A 00004900 setDocumentInfo
+          7    B 000045D0 setPrinterCaliberation
+          2    C 00001120 setPrinterLocation
+          9    D 000049C0 startDoc
+          6    E 000049F0 startNewDoc
+         10    F 000049E0 startPage
+
+  Summary
+
+        4000 .data
+        6000 .rdata
+        2000 .reloc
+        1000 .rsrc
+       18000 .text
+
+
+
+
