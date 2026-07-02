@@ -1,0 +1,118 @@
+Please provide pseudo code for below vb.net code
+this ValidateAcctNumber will be utilized for validating account number if account number is invalid then error Transaction not allowed on BGL at line no will be thrown for outflag R 
+
+ Public Function ValidateAcctNumber(ByVal sInpt As String, ByVal strBranchNo As String) As String
+        Dim sNumValFlag As String = "Y"
+        Dim iTempNum As Int64
+        Dim iTempSpaceIndex As Int16 = -1
+        Dim FilePath As String
+        Dim FileTypesPath As String
+        Dim TFFilePath As String
+        Dim TFFileTypesPath As String
+        Try
+            iTempNum = Convert.ToInt64(sInpt)
+            iTempSpaceIndex = sInpt.IndexOf(" "c)
+            If iTempSpaceIndex > -1 Then
+                sNumValFlag = "N"
+                Return sNumValFlag
+            End If
+        Catch
+            sNumValFlag = "N"
+            Return sNumValFlag
+        End Try
+        If Not File.Exists(System.AppDomain.CurrentDomain.BaseDirectory & "\html\DropDownLists\glsc_head.htm") AndAlso(Not File.Exists(System.AppDomain.CurrentDomain.BaseDirectory & "\html\DropDownLists\tfglsc_head.htm")) Then
+            sNumValFlag = "Y"
+            Return sNumValFlag
+        Else
+            Try
+                'Blocking manual credits to 381 BGLs excluding screen 20452.Base IR 17090076
+                FilePath = System.AppDomain.CurrentDomain.BaseDirectory & "\html\DropDownLists\BGL_HEAD_GLSC.htm"
+                FileTypesPath = System.AppDomain.CurrentDomain.BaseDirectory & "\html\DropDownLists\glsc_head.htm"
+
+                'Blocking Trickle File Posting in Specified BGLs linked to Screen 27200- Sundry Suspense Posting
+                TFFilePath = System.AppDomain.CurrentDomain.BaseDirectory & "\html\DropDownLists\SNSP.htm"
+                TFFileTypesPath = System.AppDomain.CurrentDomain.BaseDirectory & "\html\DropDownLists\TFSNSP.htm"
+
+                'Load files only once (cached)
+                If (BGLFileTypeContent Is Nothing OrElse BGLfileData Is Nothing) AndAlso (TFBGLFileTypeContent Is Nothing OrElse TFBGLfileData Is Nothing) Then
+                    
+                    'Blocking manual credits to 381 BGLs excluding screen 20452.Base IR 17090076
+                    If File.Exists(FilePath) AndAlso File.Exists(FileTypesPath) Then
+                        
+                        FilePath = validate.Canonicalize(FilePath)
+                        Dim bglLines = File.ReadAllLines(FilePath)
+                        BGLfileData = New HashSet(Of String)(StringComparer.Ordinal)
+                        BGLfileData = ParseAttributeofHtml(bglLines)
+                  
+                        FileTypesPath = validate.Canonicalize(FileTypesPath)
+                        Dim filetypeLines = File.ReadAllLines(FileTypesPath)
+                        BGLFileTypeContent = New HashSet(Of String)(StringComparer.Ordinal)
+                        BGLFileTypeContent = ParseAttributeofHtml(filetypeLines)
+                    Else
+                        xStatus = "N"
+                        Return xStatus
+                    End If
+
+                    'Blocking Trickle File Posting in Specified BGLs linked to Screen 27200- Sundry Suspense Posting
+                    If File.Exists(TFBGLfileData) AndAlso File.Exists(TFBGLFileTypeContent) Then
+                        
+                        TFFilePath = validate.Canonicalize(TFFilePath)
+                        Dim tfbglLines = File.ReadAllLines(TFFilePath)
+                        TFBGLfileData = New HashSet(Of String)(StringComparer.Ordinal)
+                        TFBGLfileData = ParseAttributeofHtml(tfbglLines)
+                  
+                        TFFileTypesPath = validate.Canonicalize(TFFileTypesPath)
+                        Dim tffiletypeLines = File.ReadAllLines(TFFileTypesPath)
+                        TFBGLFileTypeContent = New HashSet(Of String)(StringComparer.Ordinal)
+                        TFBGLFileTypeContent = ParseAttributeofHtml(tffiletypeLines)     
+                    Else
+                        xStatus = "N"
+                        Return xStatus
+                    End If
+                End If
+
+                ' Validate input file type (assuming input_File_Type is declared globally or passed in)
+                Try
+                    Dim BGLHead As String
+                    BGLHead = ExtractBGLHead(sInpt)
+                    If (Not String.IsNullOrEmpty(input_File_Type) AndAlso BGLFileTypeContent.Contains("""" & input_File_Type & """") AndAlso BGLfileData.Contains(BGLHead)) OrElse (If Not String.IsNullOrEmpty(input_File_Type) AndAlso TFBGLFileTypeContent.Contains("""" & input_File_Type & """") AndAlso TFBGLfileData.Contains(BGLHead) )Then                                                            
+                        
+                        sNumValFlag = "R"     
+
+                    End If
+                Catch ex As Exception
+                    sNumValFlag = "N"
+                    Return sNumValFlag
+                End Try
+            Catch ex As Exception
+                ex.ToString()
+            End Try
+        End If
+        Return sNumValFlag
+    End Function
+
+
+    Public Function ParseAttributeofHtml(ByVal fileLines As String) As HashSet(Of String)(StringComparer.Ordinal)
+    
+        Dim htmlFileData = New HashSet(Of String)(StringComparer.Ordinal)
+
+        'Join lines into a single string if they are fragmented, or parse line by line if guaranteed complete tags
+        Dim htmlContent As String = String.Join(Environment.NewLine, fileLines)
+        Dim doc As New HtmlDocument()
+        doc.LoadHtml(htmlContent)
+         
+        'Select all <option> nodes
+        Dim options = doc.DocumentNode.SelectNodes("//option")
+         
+        If options IsNot Nothing Then
+            For Each option In options
+                'Get the "value" attribute directly
+                Dim valueNode = option.Attributes("value")
+                                
+                If valueNode IsNot Nothing AndAlso Not String.IsNullOrEmpty(valueNode.Value) Then
+                    htmlFileData.Add(valueNode.Value.Trim())
+                End If
+            Next
+        End If
+        Return htmlFileData
+    End function    
